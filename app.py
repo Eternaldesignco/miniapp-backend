@@ -1,39 +1,49 @@
-# bot.py — меню слева + приём web_app_data
-import asyncio
-import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import MenuButtonWebApp, WebAppInfo
+import os, uuid
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from aiogram import Bot, types
+from aiogram.exceptions import TelegramAPIError
 
-API_TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН"
-MINIAPP_URL = "https://eternaldesignco.github.io/paybot/?v=14"  # увеличил версию
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN env var is not set")
 
-logging.basicConfig(level=logging.INFO)
-bot = Bot(API_TOKEN)
-dp = Dispatcher()
+bot = Bot(BOT_TOKEN)
+app = FastAPI()
 
-@dp.message(Command("start"))
-async def on_start(m: types.Message):
-    await m.answer("Открывай Mini App через кнопку слева (скрепка → «Открыть Mini App»).")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ВАЖНО: приём данных от мини-аппа, когда страница использует tg.sendData(...)
-@dp.message(F.web_app_data)
-async def on_web_app_data(m: types.Message):
+class Payload(BaseModel):
+    query_id: str
+    data: dict
+
+@app.get("/ping")
+async def ping():
     try:
-        await m.answer(f"✅ Mini App прислал данные:\n{m.web_app_data.data}")
+        me = await bot.get_me()
+        return {"ok": True, "bot": f"@{me.username}"}
     except Exception as e:
-        await m.answer(f"Не смог прочитать данные: {e!s}")
+        return {"ok": False, "error": str(e)}
 
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_chat_menu_button(
-        menu_button=MenuButtonWebApp(
-            text="Открыть Mini App",
-            web_app=WebAppInfo(url=MINIAPP_URL)
+@app.post("/tma/submit")
+async def submit(p: Payload):
+    try:
+        result = types.InlineQueryResultArticle(
+            id=str(uuid.uuid4()),
+            title="Заявка получена",
+            input_message_content=types.InputTextMessageContent(
+                message_text=f"✅ Mini App прислал данные:\n{p.data}"
+            ),
         )
-    )
-    print("🚀 Бот запущен")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await bot.answer_web_app_query(p.query_id, result)
+        return {"ok": True}
+    except TelegramAPIError as e:
+        raise HTTPException(status_code=400, detail=f"telegram_error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"server_error: {e}")
