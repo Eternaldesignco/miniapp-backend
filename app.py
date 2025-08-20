@@ -1,58 +1,51 @@
-# app.py — FastAPI backend for Telegram Mini App (с CORS)
 import os
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+import json
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
-from aiogram import Bot
+from aiogram.client.bot import Bot
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
-# === ТОКЕН БОТА ===
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВАШ_ТОКЕН_БОТА_ЗДЕСЬ")
+# ---- конфиг
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # задашь в Render → Environment
 bot = Bot(BOT_TOKEN)
 
-app = FastAPI(title="MiniApp Backend")
+app = FastAPI()
 
-# === CORS: разрешаем запросы с GitHub Pages / Telegram WebView ===
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],       # можно сузить до ["https://eternaldesignco.github.io"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# входные данные
 class SubmitPayload(BaseModel):
-    query_id: str | None = None
-    user_id: int | None = None        # запасной путь
-    data: dict
+    query_id: str          # обязателен при открытии через кнопку слева/меню
+    data: dict             # любая твоя полезная нагрузка (имя/тел/коммент)
+    user_id: int | None = None  # можно не присылать
 
-@app.get("/")
-async def root():
-    return {"ok": True, "service": "miniapp-backend"}
-
-@app.get("/health")
-async def health():
-    return {"ok": True}
+@app.get("/healthz")
+async def healthz():
+    return PlainTextResponse("OK")
 
 @app.post("/tma/submit")
-async def tma_submit(p: SubmitPayload, request: Request):
+async def tma_submit(p: SubmitPayload):
     """
-    1) Есть p.query_id -> отвечаем через answerWebAppQuery (основной путь)
-    2) Иначе, если задан p.user_id -> отправляем личное сообщение пользователю
+    Возвращаем сообщение в чат через answerWebAppQuery.
+    Работает только если query_id прислан из Mini App.
     """
-    text = "✅ Mini App прислал данные:\n" + repr(p.data)
+    if not BOT_TOKEN:
+        return JSONResponse({"ok": False, "error": "No BOT_TOKEN set"}, status_code=500)
+    if not p.query_id:
+        return JSONResponse({"ok": False, "error": "query_id is empty"}, status_code=400)
 
-    if p.query_id:
-        result = InlineQueryResultArticle(
-            id=str(p.data.get("ts", "1")),
-            title="Заявка из Mini App",
-            input_message_content=InputTextMessageContent(message_text=text),
+    text = "✅ Mini App прислал данные:\n" + json.dumps(
+        p.data, ensure_ascii=False, indent=2
+    )
+
+    try:
+        await bot.answer_web_app_query(
+            web_app_query_id=p.query_id,
+            result=InlineQueryResultArticle(
+                id="ok",
+                title="Заявка отправлена",
+                input_message_content=InputTextMessageContent(text)
+            ),
         )
-        await bot.answer_web_app_query(web_app_query_id=p.query_id, result=result)
-        return {"ok": True, "via": "answerWebAppQuery"}
-
-    if p.user_id:
-        await bot.send_message(chat_id=p.user_id, text=text)
-        return {"ok": True, "via": "sendMessage"}
-
-    return {"ok": False, "error": "Either query_id or user_id must be provided"}
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
