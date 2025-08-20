@@ -1,51 +1,49 @@
 import os
-import json
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, PlainTextResponse
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from aiogram.client.bot import Bot
+from aiogram import Bot
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
-# ---- конфиг
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # задашь в Render → Environment
-bot = Bot(BOT_TOKEN)
+# ==== ТВОЙ ТОКЕН БОТА (вшит) ====
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7681232671:AAEVffXef-YtxpRLHbohNh00kg7Qj2lg-U0")
+
+bot = Bot(token=BOT_TOKEN, parse_mode=None)
 
 app = FastAPI()
 
-# входные данные
-class SubmitPayload(BaseModel):
-    query_id: str          # обязателен при открытии через кнопку слева/меню
-    data: dict             # любая твоя полезная нагрузка (имя/тел/коммент)
-    user_id: int | None = None  # можно не присылать
+# CORS — чтобы GitHub Pages мог обращаться к Render
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],         # при желании сузишь до своего GH Pages
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
+)
 
-@app.get("/healthz")
-async def healthz():
-    return PlainTextResponse("OK")
+class SubmitPayload(BaseModel):
+    query_id: str
+    data: dict
+
+@app.get("/")
+async def root():
+    return {"ok": True, "ping": "pong"}
 
 @app.post("/tma/submit")
-async def tma_submit(p: SubmitPayload):
-    """
-    Возвращаем сообщение в чат через answerWebAppQuery.
-    Работает только если query_id прислан из Mini App.
-    """
-    if not BOT_TOKEN:
-        return JSONResponse({"ok": False, "error": "No BOT_TOKEN set"}, status_code=500)
-    if not p.query_id:
-        return JSONResponse({"ok": False, "error": "query_id is empty"}, status_code=400)
+async def submit(payload: SubmitPayload):
+    if not payload.query_id:
+        raise HTTPException(status_code=400, detail="query_id is required (open inside Telegram)")
 
-    text = "✅ Mini App прислал данные:\n" + json.dumps(
-        p.data, ensure_ascii=False, indent=2
+    text = f"✅ Mini App прислал данные:\n{payload.data}"
+
+    result = InlineQueryResultArticle(
+        id=str(uuid4()),
+        title="Заявка принята",
+        input_message_content=InputTextMessageContent(message_text=text),
     )
 
-    try:
-        await bot.answer_web_app_query(
-            web_app_query_id=p.query_id,
-            result=InlineQueryResultArticle(
-                id="ok",
-                title="Заявка отправлена",
-                input_message_content=InputTextMessageContent(text)
-            ),
-        )
-        return {"ok": True}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    # Ключевой ответ — сообщение от бота в чат, инициированное Mini App
+    await bot.answer_web_app_query(web_app_query_id=payload.query_id, result=result)
+
+    return {"ok": True}
