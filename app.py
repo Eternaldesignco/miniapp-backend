@@ -1,4 +1,3 @@
-# app.py — FastAPI endpoint для Mini App (Menu Button) через answerWebAppQuery
 import os, uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +12,6 @@ if not BOT_TOKEN:
 bot = Bot(BOT_TOKEN)
 app = FastAPI()
 
-# CORS: разрешаем запросы с любой страницы (WebApp)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,7 +25,6 @@ class Payload(BaseModel):
 
 @app.get("/ping")
 async def ping():
-    # Быстрый тест: проверим, что токен рабочий
     try:
         me = await bot.get_me()
         return {"ok": True, "bot": f"@{me.username}"}
@@ -37,7 +34,6 @@ async def ping():
 @app.post("/tma/submit")
 async def submit(p: Payload):
     try:
-        # Отправим сообщение «от имени пользователя», открывшего мини-апп
         result = types.InlineQueryResultArticle(
             id=str(uuid.uuid4()),
             title="Заявка получена",
@@ -48,8 +44,6 @@ async def submit(p: Payload):
         await bot.answer_web_app_query(p.query_id, result)
         return {"ok": True}
     except TelegramAPIError as e:
-        # Ошибка от Telegram (обычно: 401 — неверный BOT_TOKEN, 400 — просрочен query_id)
         raise HTTPException(status_code=400, detail=f"telegram_error: {e}")
     except Exception as e:
-        # Любая другая ошибка сервера
         raise HTTPException(status_code=500, detail=f"server_error: {e}")
