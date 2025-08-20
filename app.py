@@ -1,77 +1,50 @@
+# app.py  — FastAPI backend for Telegram Mini App
 import os
-from uuid import uuid4
+from fastapi import FastAPI
+from pydantic import BaseModel
+from aiogram import Bot
+from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+# ====== токен бота ======
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7681232671:AAE...твой_токен...")
+bot = Bot(BOT_TOKEN)
 
-from aiogram import Bot, types
+app = FastAPI(title="MiniApp Backend")
 
-# ==== токен бота (в Render -> Environment -> BOT_TOKEN) ====
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
-
-app = FastAPI()
-
-# ==== CORS: разрешаем вызовы из WebView Telegram ====
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],          # можно сузить до ["https://web.telegram.org", ...]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class SubmitPayload(BaseModel):
+    query_id: str | None = None
+    user_id: int | None = None            # для фолбэка/тестов
+    data: dict
 
 @app.get("/")
 async def root():
-    return {"ok": True, "service": "miniapp-backend", "version": 3}
-
-@app.get("/health")
-async def health():
-    return {"ok": True}
+    return {"ok": True, "service": "miniapp-backend"}
 
 @app.post("/tma/submit")
-async def submit(req: Request):
-    # Проверим токен сразу, чтобы не было молчаливых сбоев
-    if not bot:
-        return JSONResponse(
-            {"ok": False, "error": "BOT_TOKEN is empty on server"},
-            status_code=500,
-        )
-
-    try:
-        body = await req.json()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "bad json"}, status_code=400)
-
-    data = body.get("data") or {}
-    query_id = body.get("query_id")
-    user_id = body.get("user_id")
-
-    text = "✅ Mini App прислал данные:\n" + str(data)
-
-    # 1) Если есть query_id — отвечаем через answerWebAppQuery
-    if query_id:
-        try:
-            result = types.InlineQueryResultArticle(
-                id=str(uuid4()),
-                title="Заявка отправлена",
-                input_message_content=types.InputTextMessageContent(text),
-            )
-            await bot.answer_web_app_query(web_app_query_id=query_id, result=result)
-            return {"ok": True, "via": "answerWebAppQuery"}
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": f"aq: {e}"}, status_code=500)
-
-    # 2) Иначе — шлём в личку пользователю (если передан user_id)
-    if user_id:
-        try:
-            await bot.send_message(chat_id=int(user_id), text=text)
-            return {"ok": True, "via": "sendMessage"}
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": f"sm: {e}"}, status_code=500)
-
-    return JSONResponse(
-        {"ok": False, "error": "no query_id or user_id"},
-        status_code=400,
+async def tma_submit(p: SubmitPayload):
+    """
+    Два пути:
+    1) p.query_id -> answerWebAppQuery (основной путь, когда открыли через Main App / Direct Link)
+    2) иначе (для тестов) p.user_id -> sendMessage пользователю
+    """
+    text = (
+        "✅ Mini App прислал данные:\n"
+        f"{p.data!r}"
     )
+
+    # 1) Основной путь — ответить через answerWebAppQuery
+    if p.query_id:
+        result = InlineQueryResultArticle(
+            id=str(p.data.get("ts", "1")),
+            title="Заявка из Mini App",
+            input_message_content=InputTextMessageContent(message_text=text)
+        )
+        await bot.answer_web_app_query(web_app_query_id=p.query_id, result=result)
+        return {"ok": True, "via": "answerWebAppQuery"}
+
+    # 2) Фолбэк — отправить личное сообщение пользователю
+    if p.user_id:
+        await bot.send_message(chat_id=p.user_id, text=text)
+        return {"ok": True, "via": "sendMessage"}
+
+    return {"ok": False, "error": "Either query_id or user_id must be provided"}
